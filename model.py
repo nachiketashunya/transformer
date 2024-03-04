@@ -69,7 +69,7 @@ class FeedForwardNetwork(nn.Module):
         x = self.relu(self.linear1(x))
         x = self.dropout(x)
 
-        x = self.relu(self.linear2)
+        x = self.relu(self.linear2(x))
         
         return x 
 
@@ -163,8 +163,8 @@ class DecoderBlock(nn.Module):
         self.residual_connections = nn.ModuleList([ResidualConnection(dropout) for _ in range(3)])
     
     def forward(self, x, encoder_output, src_mask, tgt_mask):
-        x = self.residual_connections[0](x, lambda: self.attention_block(x, x, x, tgt_mask))
-        x = self.residual_connections[1](x, lambda: self.cross_attention_block(x, encoder_output, encoder_output, src_mask))
+        x = self.residual_connections[0](x, lambda x : self.attention_block(x, x, x, tgt_mask))
+        x = self.residual_connections[1](x, lambda x : self.cross_attention_block(x, encoder_output, encoder_output, src_mask))
         x = self.residual_connections[2](x, self.ffn)
 
         return x
@@ -211,7 +211,7 @@ class Transformer(nn.Module):
         tgt = self.tgt_embed(tgt)
         tgt = self.tgt_pos(tgt)
 
-        return self.encoder(tgt, encoder_output, src_mask, tgt_mask)
+        return self.decoder(tgt, encoder_output, src_mask, tgt_mask)
     
     def project(self, x):
         return self.proj(x)
