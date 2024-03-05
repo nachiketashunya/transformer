@@ -259,11 +259,3 @@ def build_transformer(src_vocab: int, tgt_vocab: int, src_seq_len: int, tgt_seq_
             nn.init.xavier_uniform_(p)
     
     return transformer
-
-
-    
-
-
-
-
-

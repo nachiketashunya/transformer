@@ -9,6 +9,8 @@ from tokenizers.pre_tokenizers import Whitespace
 from tokenizers.trainers import WordLevelTrainer
 from pathlib import Path 
 from tqdm import tqdm
+import torchmetrics
+import os
 
 from dataset import BilingualDataset, causal_mask
 from model import build_transformer
@@ -61,7 +63,7 @@ def get_ds(config):
     print(f"Max length of target sentences: {max_len_tgt}")
 
     train_dataloader = DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True)
-    val_dataloader = DataLoader(val_ds, batch_size=config['batch_size'], shuffle=True)
+    val_dataloader = DataLoader(val_ds, batch_size=1, shuffle=True)
 
     return train_dataloader, val_dataloader, src_lang_tokenizer, tgt_lang_tokenizer
 
@@ -83,7 +85,7 @@ def greedy_decode(model, source, source_mask, src_tokenizer, tgt_tokenizer, max_
             break
             
         decoder_mask = causal_mask(decoder_input.size(1)).type_as(source_mask).to(device)
-        out = model.decode(encoder_output, source_mask, decoder_input, decoder_mask)
+        out = model.decode(decoder_input, encoder_output, source_mask, decoder_mask)
 
         # Get the next token
         prob = model.project(out[:, -1])
@@ -96,8 +98,7 @@ def greedy_decode(model, source, source_mask, src_tokenizer, tgt_tokenizer, max_
     return decoder_input.squeeze(0)
 
 
-
-def run_validation(model, validation_ds, src_tokenizer, tgt_tokenizer, max_len, device, print_msg, global_state, writer, num_examples=2):
+def run_validation(model, validation_ds, src_tokenizer, tgt_tokenizer, max_len, device, print_msg, global_step, writer, num_examples=2):
     model.eval()
     count = 0
 
@@ -105,8 +106,14 @@ def run_validation(model, validation_ds, src_tokenizer, tgt_tokenizer, max_len, 
     expected = []
     predicted = []
 
-    # Console width for displaying
-    console_width = 80
+    try:
+        # get the console window width
+        with os.popen('stty size', 'r') as console:
+            _, console_width = console.read().split()
+            console_width = int(console_width)
+    except:
+        # If we can't get the console width, use 80 as default
+        console_width = 80
 
     with torch.no_grad():
         for batch in validation_ds:
@@ -124,8 +131,35 @@ def run_validation(model, validation_ds, src_tokenizer, tgt_tokenizer, max_len, 
             expected.append(target_text)
             predicted.append(model_out_text)
 
+            # Print the source, target and model output
+            print_msg('-'*console_width)
+            print_msg(f"{f'SOURCE: ':>12}{source_text}")
+            print_msg(f"{f'TARGET: ':>12}{target_text}")
+            print_msg(f"{f'PREDICTED: ':>12}{model_out_text}")
+
             if count == num_examples:
-                break 
+                print_msg('-'*console_width)
+                break
+    
+    if writer:
+        # Evaluate the character error rate
+        # Compute the char error rate 
+        metric = torchmetrics.CharErrorRate()
+        cer = metric(predicted, expected)
+        writer.add_scalar('validation cer', cer, global_step)
+        writer.flush()
+
+        # Compute the word error rate
+        metric = torchmetrics.WordErrorRate()
+        wer = metric(predicted, expected)
+        writer.add_scalar('validation wer', wer, global_step)
+        writer.flush()
+
+        # Compute the BLEU metric
+        metric = torchmetrics.BLEUScore()
+        bleu = metric(predicted, expected)
+        writer.add_scalar('validation BLEU', bleu, global_step)
+        writer.flush()
             
 
 def train_model(config):
@@ -173,7 +207,7 @@ def train_model(config):
 
             label = batch['label'].to(device) # (bs, seq_len)
 
-            # (bs, seq_len, vocab_size) --> (bs * seq_len, vocab_size)
+            # (bs, seq_len, vocab_size) --> (bs * seq_len, vocab_size). See `Learnings/loss_calc.py` for more
             loss = loss_fn(proj_output.view(-1, tgt_tokenizer.get_vocab_size()), label.view(-1))
 
             batch_iterator.set_postfix({"loss": f"{loss.item():6.3f}"})
@@ -191,6 +225,7 @@ def train_model(config):
 
             global_step += 1
         
+        run_validation(model, val_dataloader, src_tokenizer, tgt_tokenizer, config['seq_len'], device, lambda msg: batch_iterator.write(msg), global_step, writer)
         # Save the model 
         model_filename = get_weights_file_path(config, f'{epoch:02d}')
         torch.save({

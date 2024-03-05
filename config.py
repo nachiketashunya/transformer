@@ -16,8 +16,21 @@ def get_config():
         "experiment_name": "runs/tmodel"
     }
 
-def get_weights_file_path(config, epoch):
+def get_weights_file_path(config, epoch = 0, latest = False):
     model_folder = config['model_folder']
-    model_basename = config['model_basename']
-    model_filename = f"{model_basename}{epoch}.pt"
-    return str(Path(".") / model_folder / model_filename)
+   
+    if latest:
+        model_filename = f"{config['model_basename']}*"
+        weights_files = list(Path(model_folder).glob(model_filename))
+        
+        if len(weights_files) == 0:
+            return None
+        
+        weights_files.sort()
+
+        return str(weights_files[-1])
+    else:
+        model_basename = config['model_basename']
+        model_filename = f"{model_basename}{epoch}.pt"
+        
+        return str(Path(".") / model_folder / model_filename)
